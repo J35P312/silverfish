@@ -1,0 +1,20 @@
+##fileformat=VCFv4.1
+##source=htsbox-abreak-r340
+##ALT=<ID=DEL,Description="Deletion">
+##ALT=<ID=INS,Description="Insertion">
+##INFO=<ID=SVLEN,Number=1,Type=Integer,Description="SV length">
+##INFO=<ID=SVTYPE,Number=1,Type=String,Description="Type of structural variant">
+##INFO=<ID=END,Number=1,Type=Integer,Description="End coordinate of this variant">
+##INFO=<ID=QGAP,Number=1,Type=Integer,Description="Length of gap on the query sequence">
+##INFO=<ID=QPOSSTART,Number=2,Type=Integer,Description="start and end position within the query at the start position">
+##INFO=<ID=QPOSEND,Number=2,Type=Integer,Description="start and end position within the query at the end position">
+##INFO=<ID=RPOSTART,Number=2,Type=Integer,Description="reference position (start,end) of the flanking sequence (start)">
+##INFO=<ID=RPOSEND,Number=2,Type=Integer,Description="reference position (start,end) of the flanking sequence (end)">
+##INFO=<ID=MAPQ,Number=2,Type=Integer,Description="Mapping quality of the flanking sequence (start,end)">
+##INFO=<ID=STRAND,Number=2,Type=String,Description="orientation of the aligned contig (start,end)">
+##INFO=<ID=MINSC,Number=1,Type=Integer,Description="Min flanking alignment score">
+##INFO=<ID=MINTIPQ,Number=1,Type=Integer,Description="Min quality/depth flanking the break point">
+##INFO=<ID=CTGID,Number=1,Type=String,Description="name of the query contig">
+##FILTER=<ID=LowSupp,Description="MINTIPQ < 0">
+#CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO
+1	1598414	.	N	<DEL>	30	.	SVTYPE=DEL;END=1598598;SVLEN=167;STRAND=+,+;QGAP=-18;MAPQ=60,60;MINSC=283;MINTIPQ=21;CTGID=162:248;QPOSSTART=0,666;QPOSEND=648,931;RPOSTART=1597765,1598431;RPOSEND=1598580,1598863

@@ -1,16 +1,26 @@
 # silverfish
-Local de novo assembly project, De bruijn graph asssembler using the networkx module
+Local de novo assembly project, De bruijn graph asssembler using the networkx module. Should work on regions < 2kbp.
 
 # Run
+Silverfish supports fasta or bam input. Contigs are written to stdout 
 
-python silverfish.py <input_fasta> > <output_fasta>
+	python silverfish.py --bam <bam>
+
+	python silverfish.py --bam <fasta>
+
+Optionally change the kmer lenght or minimum read support.
+
+	python silverfish.py --bam <fasta> -k 1337
+
+	python silverfish.py --bam <fasta> -s 3
 
 Example:
 
-python silverfish.py test_data/1_1598414_1598580_0.fasta
+python silverfish.py test_data/1_1598414_1598580_0.bam
 
-note the assmebler does not handle reads from different stands, I suggest reverse complementing reads on the negative strand before running.
+note: when reading fasta, I suggest reverse complementing reads on the negative strand before running, or providing a bam file.
+When providing bam file, SIlverfish will skip duplicates, secondary alignments, and supplementary alignments. 
 
 # Dependencies
 
-python3, networkx, matplotlib
+python3, networkx, matplotlib, pysam

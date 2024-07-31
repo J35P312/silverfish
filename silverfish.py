@@ -2,6 +2,8 @@ import networkx as nx
 import matplotlib.pyplot as plt
 import time
 import sys
+import pysam
+import argparse
 
 def read_fasta(fasta_path):
 	reads={}
@@ -15,7 +17,18 @@ def read_fasta(fasta_path):
 
 	return(reads)
 
+def read_bam(bam_path):
+	reads={}
+	readname=0
+	samfile = pysam.AlignmentFile(bam_path, "rb")
+	for read in samfile:
+		if read.is_duplicate or read.is_supplementary or read.is_secondary:
+			continue
 
+		reads[readname]=read.query_sequence
+		readname+=1
+
+	return(reads)
 
 def find_chain(graph,start,ends):
 	chain=[start]
@@ -45,7 +58,6 @@ def find_chain(graph,start,ends):
 
 		successor_node=successor_node[0]
 	return(chain)
-
 
 def kmerizer(seq,k):
 	read_graph = nx.DiGraph()
@@ -97,8 +109,6 @@ def add_edge_weight(reads,graph):
 		for edge in reads[read][0].edges:
 			graph[edge[0]][edge[1]]["weight"]+=1
 
-
-
 	return(graph)
 
 def trim_edges(graph,min_weight):
@@ -108,12 +118,19 @@ def trim_edges(graph,min_weight):
 			graph.remove_edge(edge[0],edge[1])
 	return(graph)
 
-
 def main(reads,k,min_support):
 
 	kmers={}
 	for read in reads:
+		if len(reads[read]) < k+1:
+			continue
+
 		kmers[read]=kmerizer(reads[read],k)
+
+	if not reads:
+		print("no reads found")
+		print("make sure k is shorter than read lenght, and that the input contains reads")
+		quit()
 	
 	graph = nx.DiGraph()
 	#add all nodes
@@ -162,10 +179,8 @@ def main(reads,k,min_support):
 		if stretches[i][-1] in branch_start:
 			branch_start_chains[stretches[i][-1]]=i
 
-
 	stretch_graph=[]
 	bubble_arcs=[]
-
 	
 	bridging_reads={}
 	scaffold_graph=nx.DiGraph()
@@ -223,23 +238,30 @@ def main(reads,k,min_support):
 
 	#plt.show()
 
-
-k=101
 min_branch_length=2
-min_support=3
-
 min_overlap=0.2
 max_overlap=0.8
 
+parser = argparse.ArgumentParser(prog='Silverfish',description='Local de novo assembler')
+parser.add_argument('-b', '--bam')
+parser.add_argument('-f', '--fasta')
+parser.add_argument('-k','--kmer-length',default=101)
+parser.add_argument('-s','--min-support',default=3)
 
-read="ATTGCCGATATTA"
-read3="ATTGCCGATATTA"
-read2="ATATTACCCCAAATTG"
-read5="ATTGCCGATCCCCAAATTG"
+args = parser.parse_args()
 
-#t=time.time()
-#reads={"1":read,"2":read2,"3":read3,"4":read2[0:10],"5":read5,"6":read5,"7":read5,"8":read,"9":read2}
+if args.bam and args.fasta:
+	print("input either bam or fasta, not both")
+	quit()
 
-reads=read_fasta(sys.argv[1])
-main(reads,k,min_support)
+if not args.bam and not args.fasta:
+	print("bam or fasta is required")
+	quit()
+
+if args.bam:
+	reads=read_bam(args.bam)
+else:
+	reads=read_fasta(args.fasta)
+
+main(reads,args.kmer_length,args.min_support)
 

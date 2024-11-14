@@ -1,9 +1,9 @@
-import networkx as nx
-import matplotlib.pyplot as plt
 import time
 import sys
 import pysam
 import argparse
+import graphlib
+import copy
 
 def read_fasta(fasta_path):
 	reads={}
@@ -16,6 +16,23 @@ def read_fasta(fasta_path):
 			reads[str(readname)]=line.strip()
 
 	return(reads)
+
+def build_kmer_hist(seq,kmer_hist,k):
+	seq_len=len(seq)
+	kmers=[]
+	for i in range(0,seq_len-k+1):
+
+		kmer=seq[i:i+k]
+		if len(kmer) < k:
+			break
+		kmers.append(kmer)
+
+		if not kmer in kmer_hist:
+			kmer_hist[kmer]=0
+
+		kmer_hist[kmer]+=1
+
+	return(kmers,kmer_hist)	
 
 def read_bam(bam_path):
 	reads={}
@@ -33,220 +50,240 @@ def read_bam(bam_path):
 def find_chain(graph,start,ends):
 	chain=[start]
 	current_node=start
-
-	successor_node=list(graph.successors(current_node))
-	if not successor_node or len(successor_node) > 1:
-		return(chain)	
-	successor_node=successor_node[0]
+	if start in ends:
+		return(chain)
 		
-	while successor_node:
-		current_node=graph.successors(current_node)
-		current_node=list(current_node)
-
-		if not current_node:
-			break
-		current_node=current_node[0]
-		chain.append(current_node)
-
-		successor_node=list(graph.successors(current_node))
-		if not successor_node or len(successor_node) > 1:
-			return(chain)
-
-		if successor_node[0] in ends:
-			chain.append(successor_node[0])
-			return(chain)
-
-		successor_node=successor_node[0]
-	return(chain)
-
-def kmerizer(seq,k):
-	read_graph = nx.DiGraph()
-
-	seq_len=len(seq)
-	kmers=[]
-	for i in range(0,seq_len-k+1):
-		read_graph.add_node( seq[i:i+k] )
-		kmers.append(seq[i:i+k])
-
-	for i in range(0,len(kmers)-1):
-		read_graph.add_edge(kmers[i], kmers[i+1])
-		
-	return([read_graph,kmers[0],kmers[-1]])
-
-def graph_to_seq(graph):
-	seq=[]
-
-	nodes=graph.nodes()
-	starting_point=False
-
-	for node in nodes:
-		successors=list(graph.successors(node))
-		predecessors=list(graph.predecessors(node))
-
-		if not predecessors and starting_point:
-			print("error, multiple starting points")
-			quit()
-
-		if not predecessors:
-			starting_point=node
-
-	node=starting_point
-	seq=[node]
 	while True:
-		node=list(graph.successors(node))
-		if not node:
-			break
-		seq.append(node[0][-1])
-		node=node[0]
+		current_node=graph.sucessors[current_node]
 
-	return("".join(seq))
+		if not current_node or len(current_node) > 1 or current_node == start or current_node in ends:
+			return(chain)
+		current_node=list(current_node)[0]
+		chain.append(current_node)
+		if current_node in ends:
+			return(chain)
 
-def add_edge_weight(reads,graph):
-	for edge in graph.edges:
-			graph[edge[0]][edge[1]]["weight"]=0
-
-	for read in reads:
-		for edge in reads[read][0].edges:
-			graph[edge[0]][edge[1]]["weight"]+=1
-
+def drop_kmers(graph,min_support):
+	kmers=list(graph.kmers.keys())
+	for kmer in kmers:
+		if len(graph.kmers[kmer]) < min_support:
+			graph.delete_kmer(kmer)
 	return(graph)
 
 def trim_edges(graph,min_weight):
-	edge_list=list(graph.edges)
+	edge_list=list(graph.vertice_set)
 	for edge in edge_list:
-		if graph[edge[0]][edge[1]]["weight"] < min_weight:
-			graph.remove_edge(edge[0],edge[1])
+		if len(graph.vertices[edge[0]][edge[1]]) < min_weight:
+			graph.delete_vertice(edge[0],edge[1])
 	return(graph)
+
+def remove_tips(graph,min_tip_length):
+	branch_start=graph.in_branch_points
+	branch_end=graph.out_branch_points
+	starting_point=graph.starting_points
+
+	switches=branch_end.union(branch_start)
+	for start in starting_point.union(branch_start,branch_end):	
+		chains=[]
+		for node in graph.sucessors[start]:
+			chains.append([start]+find_chain(graph,node,switches))
+
+		for chain in chains:
+			if len(chain) < 20 and chain[-1] in graph.end_points:
+				for node in chain:
+					graph.delete_kmer(node)
+
+	return(graph)
+
+
+def chain_typer(chain,graph):
+
+	if chain[0] in graph.starting_points:
+		return("starting_point")
+	elif chain[-1] in graph.end_points:
+		return("end_point")
+
+	elif chain[0] in graph.in_branch_points:
+		if chain[-1] in graph.out_branch_points:
+			return("in_out")
+		elif chain[-1] in graph.in_branch_points:
+			return("in_in")
+
+	elif chain[0] in graph.out_branch_points:
+		if chain[-1] in graph.out_branch_points:
+			return("out_out")
+
+		elif chain[-1] in graph.in_branch_points:
+			return("out_in")
+
+	return("unknown")
+
+def forward_scaffold(scaffold,chains,graph,chain_numbers):
+	results=[]
+	
+	for i in range(0,len(chains)):
+		if i in chain_numbers:
+			continue
+
+		if chains[i][0][0] == chains[scaffold][0][-1]:
+			r=forward_scaffold(i,chains,graph,set([i]) | chain_numbers )
+
+			for j in range(0,len(r)):
+				results.append( [ chains[scaffold][0]+r[j][0][1:],r[j][1] | set([scaffold]) ] )
+			
+	if not results:
+		results=[ [chains[scaffold][0], set([scaffold]) ] ]
+
+	return(results)
+
+def backward_scaffold(scaffold,chains,graph,chain_numbers):
+	results=[]
+	
+	for i in range(0,len(chains)):
+		if i in chain_numbers:
+			continue
+
+		if chains[i][0][-1] == chains[scaffold][0][0]:
+			r=backward_scaffold(i,chains,graph,set([i]) | chain_numbers )
+
+			for j in range(0,len(r)):
+				results.append( [ r[j][0]+chains[scaffold][0][1:],r[j][1] | set([scaffold]) ] )
+			
+	if not results:
+		results=[ [chains[scaffold][0], set([scaffold]) ] ]
+
+	return(results)
 
 def main(reads,k,min_support):
 
+	time_all=time.time()
+
 	kmers={}
+	time_kmerize=time.time()
+	graph = graphlib.graph()
+
+	kmer_hist={}
 	for read in reads:
+		if len(reads[read]) < k:
+			continue
+
+		read_kmers,kmer_hist=build_kmer_hist(reads[read],kmer_hist,k)
+		kmers[read]=read_kmers
+
+	for read in kmers:
 		if len(reads[read]) < k+1:
 			continue
 
-		kmers[read]=kmerizer(reads[read],k)
+
+		for i in range(1,len(kmers[read])):
+
+			if kmer_hist[kmers[read][i-1]] < min_support and kmer_hist[kmers[read][i]] < min_support:
+				continue
+
+			if kmer_hist[kmers[read][i]] < min_support and kmer_hist[kmers[read][i-1]] >= min_support:
+				graph.add_kmer(kmers[read][i-1],read)
+
+			elif kmer_hist[kmers[read][i]] >= min_support and kmer_hist[kmers[read][i-1]] < min_support:
+				graph.add_kmer(kmers[read][i],read)
+
+			if kmer_hist[kmers[read][i]] >= min_support and kmer_hist[kmers[read][i]] >= min_support:
+				graph.add_vertice(kmers[read][i-1],kmers[read][i],read)		
+
+	print("kmerized:",time.time()-time_kmerize)
 
 	if not reads:
 		print("no reads found")
 		print("make sure k is shorter than read lenght, and that the input contains reads")
 		quit()
 	
-	graph = nx.DiGraph()
-	#add all nodes
-	for read in kmers:
-		graph.update(kmers[read][0])
-	nodes=set(graph.nodes)
 
+	time_graph=time.time()
 
-	graph=add_edge_weight(kmers,graph)
+	print("graph construction:",time.time()-time_graph)
+
+	time_clean=time.time()
+	graph=drop_kmers(graph,min_support)
 	graph=trim_edges(graph,min_support)
+	graph=remove_tips(graph,10)
+	print("cleaned graph:",time.time()-time_clean)
 
-	starting_point=set([])
-	end_point=set([])
-	branch_start=set([])
-	branch_end=set([])
+	branch_start=graph.in_branch_points
+	branch_end=graph.out_branch_points
+	starting_point=graph.starting_points
 
-	for node in nodes:
-		successors=list(graph.successors(node))
-		predecessors=list(graph.predecessors(node))
+	chains=[]
+	time_define_chains=time.time()
 
-		if not successors:
-			end_point.add(node)
-		if not predecessors:
-			starting_point.add(node)
-
-		if len(successors) > 1:
-			branch_start.add(node)
-
-		if len(predecessors) > 1:
-			branch_end.add(node)
-
-	stretches=[]
-	branch_start_chains={}
-	branch_end_chains={}
-
+	switches=branch_end.union(branch_start)
 	for start in starting_point.union(branch_start,branch_end):	
-		for node in graph.successors(start):
-			node=str(node)
-			chain=[start]+find_chain(graph,node,branch_end.union(branch_start))
-			if len(chain) > min_branch_length:
-				stretches.append(chain)
+		for node in graph.sucessors[start]:
 
-	for i in range(0,len(stretches)):
-		if stretches[i][0] in branch_end:
-			branch_end_chains[stretches[i][0]]=i
-		if stretches[i][-1] in branch_start:
-			branch_start_chains[stretches[i][-1]]=i
+			chain=[start]+find_chain(graph,node,switches)
+			chain_type=chain_typer(chain,graph)
+			chains.append([chain,chain_type])
 
-	stretch_graph=[]
-	bubble_arcs=[]
-	
-	bridging_reads={}
-	scaffold_graph=nx.DiGraph()
-	for i in range(0,len(stretches)):
-		#stretch_graph.add_node( i )
-		if stretches[i][0] in branch_start and stretches[i][-1] in branch_end:
-			bubble_arcs.append(i)
+	print("defined chains:", time.time()-time_define_chains)
 
-		bridging_reads[i]=set([])
-		stretch_graph.append( nx.subgraph(graph,stretches[i]) )
+	scaffolds=[]
+	build_scaffolds=time.time()
 
-	scaffolds={}
-	scaffolded_arcs=set([])
+	for i in range(0,len(chains)):
+		chain=chains[i][0]
+		start=chain[0]
+		end=chain[-1]
 
-	for i in range(0,len(stretches)):
-		chain=stretches[i]
+		scaffold=[]	
 
-		scaffold=nx.DiGraph(stretch_graph[i])
-		scaffolded=set([])
+		if chains[i][1] == "end_point":
+			results=backward_scaffold(i,chains,graph,set([i]) )
+			#print(results[0][1],i)
+			#print(results[0][0][-1] == chains[i][0][-1])
+			scaffolds+=results
 
-		if chain[0] in starting_point:
-			continue
-
-		if chain[0] in branch_start and chain[0] in branch_start_chains:		
-			scaffold.update(stretch_graph[branch_start_chains[chain[0]]])
-			scaffolded_arcs.add(branch_start_chains[chain[0]])
-		if chain[-1] in branch_end and chain[-1] in branch_end_chains:		
-			scaffold.update(stretch_graph[branch_end_chains[chain[-1]]])
-			scaffolded_arcs.add(branch_end_chains[chain[-1]])
-
-		if scaffold:	
-			scaffolds[i]=scaffold
-		
-	final_scaffolds=[]	
-	for i in range(0,len(stretches)):
-		if i in scaffolds:
-			final_scaffolds.append(scaffolds[i])
-		elif i in scaffolded_arcs:
-			continue
+		elif chains[i] == "start_point":
+			results=forward_scaffold(i,chains,graph,set([i]) )
+			scaffolds+=results
 		else:
-			final_scaffolds.append(stretch_graph[i])
+			forward=forward_scaffold(i,chains,graph,set([i]) )
+			for forward_result in forward:
+				backward_result=backward_scaffold(i,chains,graph,forward_result[1] )
+				for result in backward_result:
+					scaffolds.append([  result[0]+forward_result[0][len(chains[i][0])-1:],forward_result[1] | result[1]])
+	#print(scaffolds)
+	print("build scaffolds",time.time()-build_scaffolds)
 
-	scaffold_id=1
-	for scaffold in final_scaffolds:
-		print(f">scaffold_{scaffold_id}")
-		print(graph_to_seq(scaffold))
-		scaffold_id+=1
+	for i in range(0,len(scaffolds)):
+	
+		skip=False
+		for j in range(0,len(scaffolds)):
+			if j ==i or j < i:
+				continue
+			if not len(scaffolds[i][-1]-scaffolds[j][-1]):
+				skip=True
 
-	#subax1 = plt.subplot(131)
-	nx.draw(final_scaffolds[0], with_labels=True, font_weight='bold')
-	#subax2 = plt.subplot(132)
-	#nx.draw(final_scaffolds[1], with_labels=True, font_weight='bold')
-	#subax4 = plt.subplot(133)
-	#nx.draw(graph, with_labels=True, font_weight='bold')
+		if skip:
+			continue
 
-	#plt.show()
+		scaffolded_chains=list(map(str,scaffolds[i][-1]))
+
+		print(f">scaffold_{i} {','.join(scaffolded_chains)}")
+		out=[]
+
+		for j in range(1,len(scaffolds[i][0])):
+			out.append(scaffolds[i][0][j][-1])
+
+		print(scaffolds[i][0][0]+"".join(out))
 
 min_branch_length=2
 min_overlap=0.2
 max_overlap=0.8
 
+
 parser = argparse.ArgumentParser(prog='Silverfish',description='Local de novo assembler')
 parser.add_argument('-b', '--bam')
 parser.add_argument('-f', '--fasta')
-parser.add_argument('-k','--kmer-length',default=101)
-parser.add_argument('-s','--min-support',default=3)
+parser.add_argument('-k','--kmer-length',default=91,type=int)
+parser.add_argument('-s','--min-support',default=4,type=int)
 
 args = parser.parse_args()
 
